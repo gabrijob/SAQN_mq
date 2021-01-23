@@ -1,17 +1,18 @@
-import tensorflow as tf
+#!./SAQN_mq_env/bin/python3
 
+import numpy as np
 from keras.models import Sequential
 from keras.layers import Dense, Dropout, Conv2D, MaxPooling2D, Activation, Flatten
-from keras.callbacks import TensorBoard
 from keras.optimizers import Adam
+from keras.callbacks import TensorBoard
+import tensorflow as tf
 from collections import deque
-import numpy as np
-import random
 import time
+import random
+from tqdm import tqdm
 import os
 from PIL import Image
 import cv2
-from tqdm import tqdm
 
 DISCOUNT = 0.99
 REPLAY_MEMORY_SIZE = 50_000  # How many last steps to keep for model training
@@ -198,11 +199,13 @@ class ModifiedTensorBoard(TensorBoard):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self.step = 1
-        self.writer = tf.summary.FileWriter(self.log_dir)
+        self.writer = tf.summary.create_file_writer(self.log_dir)
 
     # Overriding this method to stop creating default log writer
     def set_model(self, model):
-        pass
+        self.model = model
+        self._train_dir = self.log_dir + '/train'
+        #pass
 
     # Overrided, saves logs with our step number
     # (otherwise every .fit() will start writing from 0th step)
@@ -214,9 +217,23 @@ class ModifiedTensorBoard(TensorBoard):
     def on_batch_end(self, batch, logs=None):
         pass
 
+    def on_train_begin(self, logs=None):
+        pass
+
     # Overrided, so won't close writer
     def on_train_end(self, _):
         pass
+
+     # added for performance?
+    def on_train_batch_end(self, _, __):
+        pass
+
+    def _write_logs(self, logs, index):
+        with self.writer.as_default():
+            for name, value in logs.items():
+                tf.summary.scalar(name, value, step=index)
+                self.step += 1
+                self.writer.flush()
 
     # Custom method for saving own metrics
     # Creates writer, writes custom metrics and closes writer
@@ -243,19 +260,19 @@ class DQNAgent:
     def create_model(self):
         # Convolutional model
         model = Sequential()
-        model.add(Conv2D(256, (3,3), input_shape=env.OBSERVATION_SPACE_VALUES))
+        model.add(Conv2D(256, (3, 3), input_shape=env.OBSERVATION_SPACE_VALUES))
         model.add(Activation("relu"))
-        model.add(MaxPooling2D(2,2))
-        model.add(Dropout(0,2))
+        model.add(MaxPooling2D(2, 2))
+        model.add(Dropout(0.2))
 
-        model.add(Conv2D(256, (3,3)))
+        model.add(Conv2D(256, (3, 3)))
         model.add(Activation("relu"))
-        model.add(MaxPooling2D(2,2))
-        model.add(Dropout(0,2))
+        model.add(MaxPooling2D(2, 2))
+        model.add(Dropout(0.2))
 
         model.add(Flatten())
         model.add(Dense(64))
-        
+
         model.add(Dense(env.ACTION_SPACE_SIZE, activation="linear"))
         model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=['accuracy'])
         return model
@@ -308,10 +325,14 @@ class DQNAgent:
             X.append(current_state)
             y.append(current_qs)
 
+
+        X_train = np.asarray(X).astype(np.float32)/255
+        y_train = np.asarray(y).astype(np.float32)
+ 
         # Fit on all samples as one batch, log only on terminal state
         self.model.fit(
-            np.array(X)/255, 
-            np.array(y), 
+            X_train, 
+            y_train, 
             batch_size=MINIBATCH_SIZE, 
             verbose=0, 
             shuffle=False, 
