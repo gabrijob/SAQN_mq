@@ -1,5 +1,4 @@
 import tensorflow as tf
-import tensorflow.keras as keras
 
 from keras.models import Sequential
 from keras.layers import Dense, Dropout, Conv2D, MaxPooling2D, Activation, Flatten
@@ -186,7 +185,7 @@ ep_rewards = [-200]
 # For more repetitive results
 random.seed(1)
 np.random.seed(1)
-tf.set_random_seed(1)
+tf.compat.v1.set_random_seed(1)
 
 # Create models folder
 if not os.path.isdir('models'):
@@ -338,11 +337,11 @@ for episode in tqdm(range(1, EPISODES+1), ascii=True, unit="episode"):
     step = 1
     current_state = env.reset()
 
-    one = False
+    done = False
     while not done:
 
         # This part stays mostly the same, the change is to query a model for Q values
-        if np.random.random() > epsilon:
+        if np.random.random_sample() > epsilon:
             # Get action from Q table
             action = np.argmax(agent.get_qs(current_state))
         else:
