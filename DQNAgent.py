@@ -1,4 +1,4 @@
-#!./SAQN_mq_env/bin/python3
+#!./venv/bin/python3
 
 import numpy as np
 from keras.models import Sequential
