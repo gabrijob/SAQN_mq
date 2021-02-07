@@ -18,7 +18,7 @@ REPLAY_MEMORY_SIZE = 50_000  # How many last steps to keep for model training
 MIN_REPLAY_MEMORY_SIZE = 1_000  # Minimum number of steps in a memory to start training
 MINIBATCH_SIZE = 32  # How many steps (samples) to use for training
 UPDATE_TARGET_EVERY = 5  # Terminal states (end of episodes)
-MODEL_NAME = 'SA-64243'
+
 MIN_REWARD = -200  # For model save
 
 
@@ -32,11 +32,7 @@ MIN_EPSILON = 0.001
 
 #  Stats settings
 AGGREGATE_STATS_EVERY = 50  # episodes
-SHOW_PREVIEW = False
 
-# MDP defs
-OBSERVATION_SPACE_VALUES = (6,)
-ACTION_SPACE_SIZE = 3 #(raise cache, reduce cache, do nothing)
 
 # Own Tensorboard class
 class ModifiedTensorBoard(TensorBoard):
@@ -89,6 +85,15 @@ class ModifiedTensorBoard(TensorBoard):
 
 # Class for fetching data from the Spark message queue environment
 class SparkMQEnv:
+    # MDP defs
+    OBSERVATION_SPACE_VALUES = (6,)
+    ACTION_SPACE_SIZE = 3 #(raise cache, reduce cache, do nothing)
+
+    def __init__(self):
+        # For more repetitive results
+        random.seed(1)
+        np.random.seed(1)
+        tf.compat.v1.set_random_seed(1)
 
     def reset(self):
         self.episode_step = 0
@@ -115,9 +120,19 @@ class SparkMQEnv:
 
         return new_state, reward, done
 
+    def calc_reward(state):
+        throughput = state[0]
+        delay = state[1] + state[2]
+
+        reward = throughput
+
+        return reward
+
 
 # SAQN Agent 
 class SAQNAgent:
+    MODEL_NAME = 'SA-64243'
+    
     def __init__(self):
         # main model, it gets trained every step
         self.model = self.create_model()
@@ -138,12 +153,12 @@ class SAQNAgent:
         model = Sequential()
 
         # Encoder part
-        model.add(Dense(4, input_shape=OBSERVATION_SPACE_VALUES, activation="relu"))
+        model.add(Dense(4, input_shape=env.OBSERVATION_SPACE_VALUES, activation="relu"))
         model.add(Dense(2, activation="relu"))
 
         # Decoder part
         model.add(Dense(4, activation='relu'))
-        model.add(Dense(ACTION_SPACE_SIZE, activation="sigmoid"))
+        model.add(Dense(env.ACTION_SPACE_SIZE, activation="sigmoid"))
 
         model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=['accuracy'])
         return model
@@ -239,7 +254,7 @@ def run_episode(agent, env, episode, ep_rewards):
             action = np.argmax(agent.get_qs(current_state))
         else:
             # Get random action TODO: change to a "safe" action
-            action = np.random.randint(0, ACTION_SPACE_SIZE)
+            action = np.random.randint(0, env.ACTION_SPACE_SIZE)
 
         new_state, reward, done = env.step(action)
     
