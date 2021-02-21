@@ -4,10 +4,10 @@ from Cython.Build import cythonize
 
 
 extensions = [
-    Extension("AgentAPI", ["AgentAPI.pyx"],
-        include_dirs=["./venv/include", "venv/lib/python3.8/site-packages/tensorflow/include"],
-        libraries=["tensorflow_framework"], 
-        library_dirs=["./venv/lib/python3.8/site-packages/tensorflow", "./venv/lib"]),
+    Extension("SAQNAgent", ["SAQNAgent.pyx"],
+        include_dirs=["./"],
+        #libraries=["tensorflow_framework"], 
+        library_dirs=["./"]),
 ]
 
 setup(
