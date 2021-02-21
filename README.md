@@ -7,8 +7,8 @@ Stacked Autoencoder Q-Network algorithm for Spark message queues management.
 	
 	sudo apt update
 	sudo apt install python3-pip
-	sudo apt install python3-venv
-	./setup_venv.sh
+	pip3 install -r requirements.txt
+	./compile.sh
 	
 	~~~~
 
@@ -16,6 +16,6 @@ Stacked Autoencoder Q-Network algorithm for Spark message queues management.
 	
 	~~~~
 	
-	./SAQNAgent.py
+	./DummyMQ.c
 	
 	~~~~
