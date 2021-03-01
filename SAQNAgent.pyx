@@ -16,7 +16,7 @@ import array
 
 from cpython cimport array
 
-CSVFILENAME = "episodes.log"
+CSVFILENAME = "logs/episodes.log"
 
 DISCOUNT = 0.5
 REPLAY_MEMORY_SIZE = 50_000  # How many last steps to keep for model training
@@ -257,19 +257,18 @@ class AgentEpisode:
         if os.path.isfile(CSVFILENAME):
             with open(CSVFILENAME, "r", encoding="utf-8") as scraped:
                 reader = csv.reader(scraped, delimiter=',')
-                last_episode = reader[-1]
-            
-                # Get epsilon number from file
-                self.epsilon = last_episode[1]
+                #last_episode = reader.pop()
+                for last_episode in reader:
+                    # Get epsilon number from file
+                    self.epsilon = float(last_episode[1])
 
-                # Get episode number from file
-                self.episode = last_episode[0] + 1
-                self.agent.tensorboard.step = self.episode
+                    # Get episode number from file
+                    self.episode = int(last_episode[0]) 
         else:
-            self.epsilon = 1
-            self.episode = 1
-            self.agent.tensorboard.step = self.episode
-
+                self.epsilon = 1
+                self.episode = 1
+                
+        self.agent.tensorboard.step = self.episode
         self.episode_reward = 0
         self.step = 1
         self.current_state = start_state
@@ -311,7 +310,7 @@ class AgentEpisode:
                 reader = csv.reader(scraped, delimiter=',')
 
                 for row in reader:
-                    ep_rewards.append(row[2])
+                    ep_rewards.append(float(row[2]))
 
         # Append episode reward to a list and log stats (every given number of episodes)
         ep_rewards.append(self.episode_reward)
@@ -331,7 +330,7 @@ class AgentEpisode:
             self.epsilon = max(MIN_EPSILON, self.epsilon)
 
 
-        with open(CSVFILENAME, mode='w') as episode_file:
+        with open(CSVFILENAME, mode='a+') as episode_file:
             writer = csv.writer(episode_file, delimiter=',')
 
             writer.writerow([self.agent.tensorboard.step, self.epsilon, self.episode_reward])
