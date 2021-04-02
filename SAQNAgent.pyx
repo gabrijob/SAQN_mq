@@ -2,8 +2,8 @@
 
 import tensorflow as tf
 import numpy as np
-from keras.models import Sequential
-from keras.layers import Dense, Activation
+from keras.models import Sequential, load_model
+from keras.layers import Dense, Activation, Lambda
 from keras.optimizers import Adam
 from keras.callbacks import TensorBoard
 from collections import deque
@@ -16,7 +16,11 @@ import array
 
 from cpython cimport array
 
-CSVFILENAME = "logs/episodes.log"
+#LOAD_MODEL = 'saqn_models/saved/SA-84243__1616895138.model' # or None
+LOAD_MODEL = None
+MODELS_DIR = '/tmp/saqn_models'
+LOGS_DIR =  '/tmp/saqn_logs'
+CSVFILENAME = LOGS_DIR + "/episodes.log"
 
 DISCOUNT = 0.5
 REPLAY_MEMORY_SIZE = 50_000  # How many last steps to keep for model training
@@ -24,23 +28,24 @@ MIN_REPLAY_MEMORY_SIZE = 1_000  # Minimum number of steps in a memory to start t
 MINIBATCH_SIZE = 32  # How many steps (samples) to use for training
 UPDATE_TARGET_EVERY = 5  # Terminal states (end of episodes)
 
-MIN_REWARD = -200  # For model save
-MODEL_NAME = 'SA-64243'
+MODEL_NAME = 'SA-84243'
 
 # Environment settings
 EPISODES = 20_000
 
 # Exploration settings
-epsilon = 1  # not a constant, going to be decayed
-EPSILON_DECAY = 0.99975
+epsilon = 1.0  # not a constant, going to be decayed
+EPSILON_DECAY = 0.99875
 MIN_EPSILON = 0.001
+DECAY_EPSILON_STEP = 5
 
 #  Stats settings
-AGGREGATE_STATS_EVERY = 50  # episodes
+AGGREGATE_STATS_EVERY = 20  # steps
 
 # MDP defs
-OBSERVATION_SPACE_VALUES = (6,)
-ACTION_SPACE_SIZE = 3 #(raise cache, reduce cache, do nothing)
+OBSERVATION_SPACE_VALUES = (8,)
+ACTION_SPACE_SIZE = 6 #[(reduce cache, do nothing, raise cache) performance case
+                        #(reduce cache, do nothing, raise cache)] cost case
 
 # Own Tensorboard class
 class ModifiedTensorBoard(TensorBoard):
@@ -94,8 +99,8 @@ class ModifiedTensorBoard(TensorBoard):
 # Class for fetching data from the Spark message queue environment
 class SparkMQEnv:
     # MDP defs
-    OBSERVATION_SPACE_VALUES = (6,)
-    ACTION_SPACE_SIZE = 3 #(raise cache, reduce cache, do nothing)
+    #OBSERVATION_SPACE_VALUES = (6,)
+    #ACTION_SPACE_SIZE = 3 #(raise cache, reduce cache, do nothing)
 
     def __init__(self):
         # For more repetitive results
@@ -107,8 +112,8 @@ class SparkMQEnv:
         self.episode_step = 0
 
         # Make dummy state
-        # [total_throughput, proc_t, sche_t, msgs_in_gb, ready_mem, spark_thresh]
-        start_state = [0, 0, 0, 0, 0, 0]
+        # [total_throughput, thpt_variation, proc_t, sche_t, msgs_to_spark, msgs_in_gb, ready_mem, spark_thresh]
+        start_state = [0, 0, 0, 0, 0, 0, 0, 0]
 
         return start_state
 
@@ -119,7 +124,7 @@ class SparkMQEnv:
         # get new state
 
         # make dummy state, reward and done
-        new_state = [100, 1, 1, 10, 1, 0.5]
+        new_state = [100, 1, 1, 10, 1, 0.5, 3, 50.8]
 
         reward = 1
         if self.episode_step > 1_000:
@@ -129,17 +134,21 @@ class SparkMQEnv:
         return new_state, reward, done
 
     def calc_reward(self, state):
-        throughput = state[0]
-        delay = state[1] + state[2]
+        #throughput = state[0]
+        thgpt_variation = state[1]
+        mem_use = state[7]
 
-        reward = throughput
+        reward_p = thgpt_variation
+        # upper limit: 30
+        # lower limit: 4
+        reward_c = 2*(4-mem_use)/(30-4)+1
 
-        return reward
+        return (reward_p, reward_c)
 
 
 # SAQN Agent 
 class SAQNAgentInstance:
-    MODEL_NAME = 'SA-64243'
+    MODEL_NAME = 'SA-84243'
     
     def __init__(self):
         # main model, it gets trained every step
@@ -151,24 +160,34 @@ class SAQNAgentInstance:
 
         self.replay_memory = deque(maxlen=REPLAY_MEMORY_SIZE)
 
-        self.tensorboard = ModifiedTensorBoard(log_dir = f"logs/{MODEL_NAME}-{time.time()}")
+        self.tensorboard = ModifiedTensorBoard(log_dir = f"{LOGS_DIR}/{MODEL_NAME}-{time.time()}")
 
         self.target_update_counter = 0
 
 
     def create_model(self):
-        #Stacked Autoencode model
-        model = Sequential()
+        model = None 
+        if LOAD_MODEL is not None:
+            # Load pre-trained model
+            print('Loading model');
+            model = load_model(LOAD_MODEL)
+            print('Model loaded ' + LOAD_MODEL)
+        else:
+            # Stacked Autoencoder model
+            model = Sequential()
 
-        # Encoder part
-        model.add(Dense(4, input_shape=OBSERVATION_SPACE_VALUES, activation="relu"))
-        model.add(Dense(2, activation="relu"))
+            # Encoder part
+            model.add(Dense(4, input_shape=OBSERVATION_SPACE_VALUES, activation="relu"))
+            model.add(Dense(2, activation="relu"))
 
-        # Decoder part
-        model.add(Dense(4, activation='relu'))
-        model.add(Dense(ACTION_SPACE_SIZE, activation="sigmoid"))
+            # Decoder part
+            model.add(Dense(4, activation='relu'))
+            model.add(Dense(ACTION_SPACE_SIZE, activation="sigmoid"))
 
-        model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=['accuracy'])
+            # Normalize output from (0,2) to (-1,1)
+            #model.add(Lambda(lambda x: x-1))
+
+            model.compile(loss="mse", optimizer=Adam(lr=0.001), metrics=['accuracy'])
         return model
 
 
@@ -195,14 +214,20 @@ class SAQNAgentInstance:
 
         # Get future states from minibatch, then query NN model for Q values
         # When using target network, query it, otherwise main network should be queried
-        new_current_states = np.array([transition[3] for transition in minibatch])
+        new_current_states = np.array([transition[4] for transition in minibatch])
         future_qs_list = self.target_model.predict(new_current_states)
 
         X = []
         y = []
 
         # Now we need to enumerate our batches
-        for index, (current_state, action, reward, new_current_state, done) in enumerate(minibatch):
+        for index, (current_state, action, reward_p, reward_c, new_current_state, done) in enumerate(minibatch):
+            # Use the correct reward for the case (performance or cost)
+            reward = 0
+            if index >= ACTION_SPACE_SIZE/2:
+                reward = reward_c
+            else:
+                reward = reward_p
 
             # If not a terminal state, get new q from future states, otherwise set it to 0
             # almost like with Q Learning, but we use just part of equation here
@@ -248,8 +273,8 @@ class AgentEpisode:
     def __init__(self, start_state):
 
         # Create models folder
-        if not os.path.isdir('models'):
-            os.makedirs('models')
+        if not os.path.isdir(MODELS_DIR):
+            os.makedirs(MODELS_DIR)
 
         self.env = SparkMQEnv()
         self.agent = SAQNAgentInstance()
@@ -263,83 +288,107 @@ class AgentEpisode:
                     self.epsilon = float(last_episode[1])
 
                     # Get episode number from file
-                    self.episode = int(last_episode[0]) 
+                    self.episode = int(last_episode[0]) + 1
+
+                    # Get avg reward from last saved episode
+                    self.last_avg_reward = float(last_episode[2])
         else:
                 self.epsilon = 1
                 self.episode = 1
-                
+                self.last_avg_reward = 1
+
         self.agent.tensorboard.step = self.episode
-        self.episode_reward = 0
+        self.step_rewards = {}
+        self.step_rewards['performance'] = []
+        self.step_rewards['cost'] = []
         self.step = 1
         self.current_state = start_state
         self.last_action = 0
+        self.epsilon_counter = 0
 
-    # JUNTAR get_action() COM change_state()??????????????
+    
     def get_action(self):
+        
+        if self.epsilon_counter > DECAY_EPSILON_STEP:
+             # Decay epsilon
+            if self.epsilon > MIN_EPSILON:
+                self.epsilon *= EPSILON_DECAY
+                self.epsilon = max(MIN_EPSILON, self.epsilon)
+            self.epsilon_counter = 0
+        
 
         if np.random.random_sample() > self.epsilon:
             # Get action from Q table
             action = np.argmax(self.agent.get_qs(self.current_state))
         else:
             # Get random action (MUST BE RANDOM SO THAT IT CAN EXPLORE)
-            action = np.random.randint(0, self.env.ACTION_SPACE_SIZE)
+            action = np.random.randint(0,ACTION_SPACE_SIZE) 
 
+        self.epsilon_counter += 1
         self.last_action = action
         return action
 
     def change_state(self, new_state, done=False):
         #new_state, reward, done = env.step(action)
-        reward = self.env.calc_reward(new_state)
+        reward_p, reward_c = self.env.calc_reward(new_state)
+        self.tensorboard_log(reward_p, reward_c)
         
-        # Transform new continous state to new discrete state and count reward
-        self.episode_reward += reward
-
         # Every step we update replay memory and train main network
-        self.agent.update_replay_memory((self.current_state, self.last_action, reward, new_state, done)) #self.last_action?
+        self.agent.update_replay_memory((self.current_state, self.last_action, reward_p, reward_c, new_state, done)) #self.last_action?
         self.agent.train(done, self.step)
         self.current_state = new_state
         self.step += 1
 
-    def finish(self, last_state):
-        self.change_state(last_state, done=True)
 
-        ep_rewards = []
-        # Read list from file
-        if os.path.isfile(CSVFILENAME):
-            with open(CSVFILENAME, "r", encoding="utf-8") as scraped:
-                reader = csv.reader(scraped, delimiter=',')
-
-                for row in reader:
-                    ep_rewards.append(float(row[2]))
-
+    def tensorboard_log(self, reward_p, reward_c):
         # Append episode reward to a list and log stats (every given number of episodes)
-        ep_rewards.append(self.episode_reward)
-        if not self.episode % AGGREGATE_STATS_EVERY or self.episode == 1:
-            average_reward = sum(ep_rewards[-AGGREGATE_STATS_EVERY:])/len(ep_rewards[-AGGREGATE_STATS_EVERY:])
-            min_reward = min(ep_rewards[-AGGREGATE_STATS_EVERY:])
-            max_reward = max(ep_rewards[-AGGREGATE_STATS_EVERY:])
-            self.agent.tensorboard.update_stats(reward_avg=average_reward, reward_min=min_reward, reward_max=max_reward, epsilon=self.epsilon)
+        self.step_rewards['performance'].append(reward_p)
+        self.step_rewards['cost'].append(reward_c)
+
+        if not self.step % AGGREGATE_STATS_EVERY or self.step == 1:
+            average_reward_p = sum(self.step_rewards['performance'][-AGGREGATE_STATS_EVERY:])/len(self.step_rewards['performance'][-AGGREGATE_STATS_EVERY:])
+            min_reward_p = min(self.step_rewards['performance'][-AGGREGATE_STATS_EVERY:])
+            max_reward_p = max(self.step_rewards['performance'][-AGGREGATE_STATS_EVERY:])
+            
+            average_reward_c = sum(self.step_rewards['cost'][-AGGREGATE_STATS_EVERY:])/len(self.step_rewards['cost'][-AGGREGATE_STATS_EVERY:])
+            min_reward_c = min(self.step_rewards['cost'][-AGGREGATE_STATS_EVERY:])
+            max_reward_c = max(self.step_rewards['cost'][-AGGREGATE_STATS_EVERY:])
+            
+            self.agent.tensorboard.update_stats(
+                    reward_avg_p=average_reward_p, 
+                    reward_min_p=min_reward_p, 
+                    reward_max_p=max_reward_p, 
+                    reward_avg_c=average_reward_c,
+                    reward_min_c=min_reward_c,
+                    reward_max_c=max_reward_c,
+                    epsilon=self.epsilon)
+
 
             # Save model, but only when min reward is greater or equal a set value
-            if average_reward >= MIN_REWARD:
-                self.agent.model.save(f'models/{SAQNAgentInstance.MODEL_NAME}__{max_reward:_>7.2f}max_{average_reward:_>7.2f}avg_{min_reward:_>7.2f}min__{int(time.time())}.model')
+            if (average_reward_p + average_reward_c)**2 > self.last_avg_reward :
+                self.agent.model.save(f'{MODELS_DIR}/{SAQNAgentInstance.MODEL_NAME}__{int(time.time())}.model')
 
-        # Decay epsilon
-        if self.epsilon > MIN_EPSILON:
-            self.epsilon *= EPSILON_DECAY
-            self.epsilon = max(MIN_EPSILON, self.epsilon)
+    
 
+    def finish(self, last_state):
+        self.change_state(last_state, done=True)
+    
+        # Calculate average reward for the whole episode
+        avg_reward_p = sum(self.step_rewards['performance'])/len(self.step_rewards['performance'])
+        avg_reward_c = sum(self.step_rewards['cost'])/len(self.step_rewards['cost'])
+
+        mean_squared_reward = (avg_reward_p + avg_reward_c)**2
 
         with open(CSVFILENAME, mode='a+') as episode_file:
             writer = csv.writer(episode_file, delimiter=',')
 
-            writer.writerow([self.agent.tensorboard.step, self.epsilon, self.episode_reward])
+            writer.writerow([self.episode, self.epsilon, mean_squared_reward])
 
 
 
 cdef public object createAgent(float* start_state):
     state = []
-    for i in range(6):
+    for i in range(8):
         state.append(start_state[i])
 
     return AgentEpisode(state)
@@ -347,18 +396,19 @@ cdef public object createAgent(float* start_state):
 
 cdef public int infer(object agent , float* new_state):
     state = []
-    for i in range(6):
+    for i in range(8):
         state.append(new_state[i])
 
     agent.change_state(state)
 
     action = agent.get_action()
+    action = action % (ACTION_SPACE_SIZE/2) - 1
 
     return action
 
 cdef public void finish(object agent, float* last_state):
     state = []
-    for i in range(6):
+    for i in range(8):
         state.append(last_state[i])
     
     agent.finish(state)
