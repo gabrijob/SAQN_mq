@@ -39,7 +39,7 @@ int main(int argc, char *argv[]) {
     /* Now call into your module code. */
     printf("\nStarting Agent");
     float start_state[6] = {0.0,0.0,0.0,0,0,0};
-    PyObject* agent = createAgent(start_state);
+    PyObject* agent = createAgent(start_state, 30, 4);
 
     printf("\nGetting first action");
     float middle_state[6] = {30.0, 5.3, 5.3, 10, 8, 8};

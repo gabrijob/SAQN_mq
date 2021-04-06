@@ -102,11 +102,14 @@ class SparkMQEnv:
     #OBSERVATION_SPACE_VALUES = (6,)
     #ACTION_SPACE_SIZE = 3 #(raise cache, reduce cache, do nothing)
 
-    def __init__(self):
+    def __init__(self, upper_limit=50, lower_limit=0):
         # For more repetitive results
         random.seed(1)
         np.random.seed(1)
         tf.compat.v1.set_random_seed(1)
+
+        self.maxqos = upper_limit
+        self.minqos = lower_limit
 
     def reset(self):
         self.episode_step = 0
@@ -141,7 +144,7 @@ class SparkMQEnv:
         reward_p = thgpt_variation
         # upper limit: 30
         # lower limit: 4
-        reward_c = 2*(4-mem_use)/(30-4)+1
+        reward_c = 2*(4-mem_use)/(self.maxqos-self.minqos)+1
 
         return (reward_p, reward_c)
 
@@ -270,13 +273,13 @@ class SAQNAgentInstance:
 
 
 class AgentEpisode:
-    def __init__(self, start_state):
+    def __init__(self, start_state, upper_limit, lower_limit):
 
         # Create models folder
         if not os.path.isdir(MODELS_DIR):
             os.makedirs(MODELS_DIR)
 
-        self.env = SparkMQEnv()
+        self.env = SparkMQEnv(upper_limit, lower_limit)
         self.agent = SAQNAgentInstance()
 
         if os.path.isfile(CSVFILENAME):
@@ -386,12 +389,12 @@ class AgentEpisode:
 
 
 
-cdef public object createAgent(float* start_state):
+cdef public object createAgent(float* start_state, int minqos, int maxqos):
     state = []
     for i in range(8):
         state.append(start_state[i])
-
-    return AgentEpisode(state)
+    
+    return AgentEpisode(state, maxqos, minqos)
 
 
 cdef public int infer(object agent , float* new_state):
