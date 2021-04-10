@@ -102,7 +102,7 @@ class SparkMQEnv:
     #OBSERVATION_SPACE_VALUES = (6,)
     #ACTION_SPACE_SIZE = 3 #(raise cache, reduce cache, do nothing)
 
-    def __init__(self, upper_limit=50, lower_limit=0):
+    def __init__(self, upper_limit, lower_limit):
         # For more repetitive results
         random.seed(1)
         np.random.seed(1)
@@ -144,7 +144,7 @@ class SparkMQEnv:
         reward_p = thgpt_variation
         # upper limit: 30
         # lower limit: 4
-        reward_c = 2*(4-mem_use)/(self.maxqos-self.minqos)+1
+        reward_c = 2*(self.minqos-mem_use) / (self.maxqos-self.minqos) +1
 
         return (reward_p, reward_c)
 
